@@ -150,6 +150,7 @@ SET(MODULE_SOURCE_FILES
     ${CONTRIB_SOURCE_DIR}/dualprocshm/src/dualprocshm-linuxzynq.c
     ${CONTRIB_SOURCE_DIR}/dualprocshm/src/dualprocshm-intr.c
     ${CONTRIB_SOURCE_DIR}/dualprocshm/src/dualprocshm-noos.c
+    ${CONTRIB_SOURCE_DIR}/dualprocshm/src/dualprocshm-lock.c
     ${COMMON_SOURCE_DIR}/circbuf/circbuf-noosdual.c
     ${COMMON_SOURCE_DIR}/circbuf/circbuffer.c
     ${COMMON_SOURCE_DIR}/debugstr.c
@@ -158,7 +159,7 @@ SET(MODULE_SOURCE_FILES
     ${KERNEL_SOURCE_DIR}/timesync/timesynckcal-linuxdpshm.c
     ${KERNEL_SOURCE_DIR}/veth/veth-linuxdpshm.c
     ${ARCH_SOURCE_DIR}/target-linuxkernel.c
-    ${STACK_SOURCE_DIR}/arch/linux/lock-dualproczynq.c
+    ${STACK_SOURCE_DIR}/arch/linux/lock-linuxdualproc.c
     )
 
 IF(CMAKE_SYSTEM_PROCESSOR MATCHES "^(i.86|x86(_64)?)$")

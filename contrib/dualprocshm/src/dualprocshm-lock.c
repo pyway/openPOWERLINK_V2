@@ -1,18 +1,17 @@
 /**
 ********************************************************************************
-\file  linux/lock-dualproczynq.c
+\file   dualprocshm-lock.c
 
-\brief  Locks for Zynq with Linux in dual processor system which pcp runs on MicroBlaze
+\brief  Dual processor library - Target lock
 
-This target depending module provides lock functionality in dual processor
-system with shared memory.
+This file provides specific function definitions for the target lock.
 
-\ingroup module_target
+\ingroup module_dualprocshm
 *******************************************************************************/
 
 /*------------------------------------------------------------------------------
-Copyright (c) 2018, B&R Industrial Automation GmbH
-Copyright (c) 2018, Kalycito Infotech Private Limited
+Copyright (c) 2015, Kalycito Infotech Private Limited
+Copyright (c) 2016, Bernecker+Rainer Industrie-Elektronik Ges.m.b.H. (B&R)
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -41,7 +40,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //------------------------------------------------------------------------------
 // includes
 //------------------------------------------------------------------------------
-#include <common/target.h>
+#include <dualprocshm-target.h>
+#include <trace/trace.h>
 
 //============================================================================//
 //            G L O B A L   D E F I N I T I O N S                             //
@@ -66,29 +66,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //------------------------------------------------------------------------------
 // const defines
 //------------------------------------------------------------------------------
-#define LOCK_LOCAL_ID       0x10
-
-// Define unlock value or take predefined one...
-#ifndef LOCK_UNLOCKED_C
-#define LOCK_UNLOCKED_C     0
-#endif
-
-#if (LOCK_LOCAL_ID == LOCK_UNLOCKED_C)
-#error "Change the to LOCK_LOCAL_ID to some unique BYTE value unequal 0x00!"
-#endif
-
-//------------------------------------------------------------------------------
-// local types
-//------------------------------------------------------------------------------
-
-//------------------------------------------------------------------------------
-// local vars
-//------------------------------------------------------------------------------
-static OPLK_LOCK_T* pLock_l = NULL;
-
-//------------------------------------------------------------------------------
-// local function prototypes
-//------------------------------------------------------------------------------
 
 //============================================================================//
 //            P U B L I C   F U N C T I O N S                                 //
@@ -96,80 +73,86 @@ static OPLK_LOCK_T* pLock_l = NULL;
 
 //------------------------------------------------------------------------------
 /**
-\brief    Initializes given lock
+\brief  Target specific memory lock routine(acquire)
 
-This function initializes the lock instance.
+This routine implements a target specific locking mechanism using the shared
+memory between two processors/processes. The caller needs to pass the base
+address and processor instance of the calling processor.
 
-\param[in,out]  pLock_p             Reference to lock
+The locking is achieved using Peterson's algorithm
+\ref https://en.wikipedia.org/wiki/Peterson's_algorithm
 
-\return The function returns 0 when successful.
+\param[in,out]  pBase_p             Base address of the lock memory
+\param[in]      procInstance_p      Processor instance of the calling processor
 
-\ingroup module_target
-*/
+\ingroup module_dualprocshm
+ */
 //------------------------------------------------------------------------------
-int target_initLock(OPLK_LOCK_T* pLock_p)
+void dualprocshm_targetAcquireLock(tDualprocLock* pBase_p,
+                                   tDualProcInstance procInstance_p)
 {
-    if (pLock_p == NULL)
-        return -1;
+    tDualprocLock*      pLock = pBase_p;
+    tDualProcInstance   otherProcInstance;
 
-    pLock_l = pLock_p;
+    if (pLock == NULL)
+        return;
 
-    return 0;
-}
+    switch (procInstance_p)
+    {
+        case kDualProcFirst:
+            otherProcInstance = kDualProcSecond;
+            break;
 
-//------------------------------------------------------------------------------
-/**
-\brief    Lock the given lock
+        case kDualProcSecond:
+            otherProcInstance = kDualProcFirst;
+            break;
 
-This function tries to lock the given lock, otherwise it spins until the
-lock is freed.
+        default:
+            TRACE("Invalid processor instance\n");
+            return;
+    }
 
-\return The function returns 0 when successful.
+    DUALPROCSHM_INVALIDATE_DCACHE_RANGE(pLock, sizeof(tDualprocLock));
 
-\ingroup module_target
-*/
-//------------------------------------------------------------------------------
-int target_lock(void)
-{
-    UINT8  val;
+    DPSHM_WRITE8(&pLock->afFlag[procInstance_p], 1);
+    DUALPROCSHM_FLUSH_DCACHE_RANGE(&pLock->afFlag[procInstance_p],
+                                   sizeof(pLock->afFlag[procInstance_p]));
 
-    if (pLock_l == NULL)
-        return -1;
+    DPSHM_WRITE8(&pLock->turn, otherProcInstance);
+    DUALPROCSHM_FLUSH_DCACHE_RANGE(&pLock->turn, sizeof(pLock->turn));
 
-    // spin if id is not written to shared memory
+    DPSHM_DMB();
+
     do
     {
-        val = OPLK_IO_RD8(pLock_l);
-        // write local id if unlocked
-        if (val == LOCK_UNLOCKED_C)
-        {
-            OPLK_IO_WR8(pLock_l, LOCK_LOCAL_ID);
-            continue; // return to top of loop to check again
-        }
-    } while (val != LOCK_LOCAL_ID);
-
-    return 0;
+        DUALPROCSHM_INVALIDATE_DCACHE_RANGE(pLock, sizeof(tDualprocLock));
+    } while (DPSHM_READ8(&pLock->afFlag[otherProcInstance]) &&
+             (DPSHM_READ8(&pLock->turn) == otherProcInstance));
 }
 
 //------------------------------------------------------------------------------
 /**
-\brief    Unlock the given lock
+\brief  Target specific memory unlock routine (release)
 
-This function frees the given lock.
+This routine is used to release a lock acquired at a specified address.
 
-\return The function returns 0 when successful.
+\param[in,out]  pBase_p             Base address of the lock memory
+\param[in]      procInstance_p      Processor instance of the calling processor
 
-\ingroup module_target
-*/
+\ingroup module_dualprocshm
+ */
 //------------------------------------------------------------------------------
-int target_unlock(void)
+void dualprocshm_targetReleaseLock(tDualprocLock* pBase_p,
+                                   tDualProcInstance procInstance_p)
 {
-    if (pLock_l == NULL)
-        return -1;
+    tDualprocLock*  pLock = pBase_p;
 
-    OPLK_IO_WR8(pLock_l, LOCK_UNLOCKED_C);
+    if (pLock == NULL)
+        return;
 
-    return 0;
+    DPSHM_WRITE8(&pLock->afFlag[procInstance_p], 0);
+    DUALPROCSHM_FLUSH_DCACHE_RANGE(&pLock->afFlag[procInstance_p],
+                                   sizeof(pLock->afFlag[procInstance_p]));
 }
 
 //============================================================================//
